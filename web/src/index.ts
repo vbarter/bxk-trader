@@ -292,14 +292,14 @@ function pickModelLabel(key: PickModelKey): string {
   return MODEL_GPT_NAME;
 }
 const MODEL_STORAGE_KEY = "sx_pick_model";
-/** No toggle — Claude/GPT switcher removed; only header_model_sub remains. */
+/** No model switcher. The calendar model-month return bar is not rendered. */
 const MODEL_SWITCH_CSS = `.model-bar{display:block;margin:18px 0 0;padding:10px 14px;border:1px solid #222930;border-radius:12px;background:#0b0f12;min-width:0}.model-sub{margin:0;color:#9ba5aa;font:500 12px/1.4 "PingFang SC",ui-monospace,SFMono-Regular,Menlo,Consolas,sans-serif;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}.model-sub.is-empty{color:#9aa8ff}.top5-model-sub{margin:0;color:#9ba5aa;font:500 12px/1.4 "PingFang SC",sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}@media(max-width:599px){.model-bar{margin-top:14px;padding:8px 12px}.model-sub,.top5-model-sub{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}}`;
 function modelSwitchMarkup(_active: PickModelKey): string {
   // Switcher removed (设计师)
   return "";
 }
 function headerModelSubMarkup(): string {
-  return `<section class="model-bar" aria-label="${escapeHtml(MODEL_GPT_NAME)}"><p class="model-sub" id="model-sub">—</p></section>`;
+  return "";
 }
 /** tip_backfill (writer final): calendar day-detail note for a backfill day. */
 const TIP_BACKFILL = "这一天是事后补算的：只用到当天收盘为止的数据，按真实开盘价结算。";
@@ -754,9 +754,9 @@ function calendarView(data: WatchCalendar, model: PickModelKey = "gpt"): string 
     @media(max-width:359px){.calendar-kpis{grid-template-columns:1fr}}
   </style><main class="calendar-page">
     ${siteNavigation("calendar", model)}
-    <header class="calendar-hero"><div><p class="eyebrow"><span class="pulse" aria-hidden="true"></span>日频推荐 · 开盘结算</p><h1>观察日历</h1></div><div class="calendar-totals"><div class="calendar-kpis" aria-label="月年收益汇总"><div class="calendar-kpi"><div class="kpi-head"><span class="kpi-lab">月收益<span class="kpi-basis">${escapeHtml(LABEL_ACTUAL)}</span></span><em class="kpi-sub" id="month-return-scope">—</em></div><div class="kpi-val" id="month-return">—</div><div class="kpi-card-sub" id="month-card-sub" hidden></div></div><div class="calendar-kpi"><div class="kpi-head"><span class="kpi-lab">年收益<span class="kpi-basis">${escapeHtml(LABEL_ACTUAL)}</span></span><em class="kpi-sub" id="year-return-scope">—</em></div><div class="kpi-val" id="year-return">—</div><div class="kpi-card-sub" id="year-card-sub" hidden></div></div></div><div class="cal-rules" id="cal-rules"><div class="cal-rules-row"><div class="cal-rules-text"><p>${escapeHtml(RULES_LINE1)}</p><p>${escapeHtml(RULES_LINE2)}</p></div><button type="button" class="help-toggle cal-help" aria-label="说明" aria-expanded="false" aria-controls="cal-rules-tip">?</button></div><div class="cal-tip" id="cal-rules-tip" hidden><p>${escapeHtml(TIP_TWO_TOTALS)}</p><p>${escapeHtml(TIP_BACKFILL_LEGEND)}</p><p id="cal-kpi-track-tip" hidden></p></div></div></div></header>
+    <header class="calendar-hero"><div><p class="eyebrow"><span class="pulse" aria-hidden="true"></span>日频推荐 · 开盘结算</p><h1>观察日历</h1></div><div class="calendar-totals"><div class="calendar-kpis" aria-label="月年收益汇总"><div class="calendar-kpi"><div class="kpi-head"><span class="kpi-lab">月收益<span class="kpi-basis">${escapeHtml(LABEL_ACTUAL)}</span></span><em class="kpi-sub" id="month-return-scope">—</em></div><div class="kpi-val" id="month-return">—</div><div class="kpi-card-sub" id="month-card-sub" hidden></div></div><div class="calendar-kpi"><div class="kpi-head"><span class="kpi-lab">年收益<span class="kpi-basis">${escapeHtml(LABEL_ACTUAL)}</span></span><em class="kpi-sub" id="year-return-scope">—</em></div><div class="kpi-val" id="year-return">—</div><div class="kpi-card-sub" id="year-card-sub" hidden></div></div></div><div class="cal-rules" id="cal-rules"><div class="cal-rules-row"><div class="cal-rules-text"><p>${escapeHtml(RULES_LINE1)}</p><p>${escapeHtml(RULES_LINE2)}</p></div></div><div class="cal-tip" id="cal-rules-tip" hidden><p>${escapeHtml(TIP_TWO_TOTALS)}</p><p>${escapeHtml(TIP_BACKFILL_LEGEND)}</p><p id="cal-kpi-track-tip" hidden></p></div></div></div></header>
     ${headerModelSubMarkup()}
-    <aside class="strategy-tip"><div class="strategy-tip-head"><div class="strategy-tip-badge">${escapeHtml(strategyTipBadge)}</div><button type="button" class="help-toggle cal-help" aria-label="说明" aria-expanded="false" aria-controls="strategy-tip-panel">?</button></div><p class="strategy-tip-flow">${escapeHtml(STRATEGY_TIMELINE)}</p><p class="strategy-tip-foot">${escapeHtml(STRATEGY_DISCLAIMER)}</p><div class="cal-tip" id="strategy-tip-panel" hidden><p>${escapeHtml(TIP_STRATEGY)}</p></div>
+    <aside class="strategy-tip"><div class="strategy-tip-head"><div class="strategy-tip-badge">${escapeHtml(strategyTipBadge)}</div></div><p class="strategy-tip-flow">${escapeHtml(STRATEGY_TIMELINE)}</p><p class="strategy-tip-foot">${escapeHtml(STRATEGY_DISCLAIMER)}</p><div class="cal-tip" id="strategy-tip-panel" hidden><p>${escapeHtml(TIP_STRATEGY)}</p></div>
     </aside>
     <div class="calendar-meta"><span>更新于 ${escapeHtml(formatShanghaiTime(data.generated_at))}</span><span>红涨 <b class="cal-up-text">#ff4d4f</b> · 绿跌 <b class="cal-down-text">#3dd68c</b> · 未结算灰色</span></div>
     <section class="panel pool-panel"><div class="pool-copy"><h2>最新信号日推荐</h2><p>当日 5 只（随扫盘更新）</p></div><div class="pool-list" id="pool-list">${emptyModel ? emptyText : symbols.map((symbol) => `<span class="pool-chip"><b>${escapeHtml(symbol.code)}</b><span>${escapeHtml(symbol.name)}</span></span>`).join("")}</div></section>
