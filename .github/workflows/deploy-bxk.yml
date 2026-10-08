@@ -1,0 +1,145 @@
+# 只在 push 到 vbarter/bxk-trader 的 main 之后更新线上巴小卡。
+# 不要加 pull_request、pull_request_target、workflow_dispatch。
+# 公开仓库的 workflow_dispatch 会跑被点名的那个 ref 上的 workflow 文件，
+# 非 main 分支可以删掉下面的 if，从而读到 SSH secrets。所以只保留 push main。
+# 打开或更新 pull request 不会触发这里。
+
+name: 巴小卡生产更新
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bxk-vps-deploy
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    name: 更新代码并重启 sequoia-x-web
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'vbarter/bxk-trader' &&
+      github.event.repository.fork != true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: 准备 SSH（StrictHostKeyChecking）
+        id: ssh
+        env:
+          BXK_SSH_HOST: ${{ secrets.BXK_SSH_HOST }}
+          BXK_SSH_USER: ${{ secrets.BXK_SSH_USER }}
+          BXK_SSH_PRIVATE_KEY: ${{ secrets.BXK_SSH_PRIVATE_KEY }}
+          BXK_SSH_KNOWN_HOSTS: ${{ secrets.BXK_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -n "${BXK_SSH_HOST}" ]] || missing+=(BXK_SSH_HOST)
+          [[ -n "${BXK_SSH_USER}" ]] || missing+=(BXK_SSH_USER)
+          [[ -n "${BXK_SSH_PRIVATE_KEY}" ]] || missing+=(BXK_SSH_PRIVATE_KEY)
+          [[ -n "${BXK_SSH_KNOWN_HOSTS}" ]] || missing+=(BXK_SSH_KNOWN_HOSTS)
+          if ((${#missing[@]})); then
+            echo "missing GitHub Actions secrets: ${missing[*]}" >&2
+            exit 1
+          fi
+          if [[ ! "$BXK_SSH_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$ ]]; then
+            echo "BXK_SSH_HOST has illegal characters" >&2
+            exit 1
+          fi
+          if [[ ! "$BXK_SSH_USER" =~ ^[A-Za-z0-9._-]{1,64}$ ]]; then
+            echo "BXK_SSH_USER has illegal characters" >&2
+            exit 1
+          fi
+          umask 077
+          keyfile="$RUNNER_TEMP/bxk_deploy_key"
+          known="$RUNNER_TEMP/bxk_known_hosts"
+          wrapper="$RUNNER_TEMP/bxk_ssh"
+          printf '%s\n' "$BXK_SSH_PRIVATE_KEY" > "$keyfile"
+          printf '%s\n' "$BXK_SSH_KNOWN_HOSTS" > "$known"
+          chmod 600 "$keyfile" "$known"
+          if ! grep -q '[^[:space:]]' "$known"; then
+            echo "BXK_SSH_KNOWN_HOSTS is empty" >&2
+            exit 1
+          fi
+          {
+            echo '#!/bin/bash'
+            printf 'exec ssh -i %q \\\n' "$keyfile"
+            echo '  -o BatchMode=yes \'
+            echo '  -o StrictHostKeyChecking=yes \'
+            printf '  -o UserKnownHostsFile=%q \\\n' "$known"
+            echo '  -o IdentitiesOnly=yes \'
+            echo '  -o ConnectTimeout=20 \'
+            echo '  -o ServerAliveInterval=15 \'
+            echo '  -o ServerAliveCountMax=4 \'
+            echo '  "$@"'
+          } > "$wrapper"
+          chmod 700 "$wrapper"
+          printf '%s\n' "$wrapper" > "$RUNNER_TEMP/bxk_ssh_path"
+          printf '%s@%s\n' "$BXK_SSH_USER" "$BXK_SSH_HOST" > "$RUNNER_TEMP/bxk_target"
+
+      - name: 停止 sequoia-x-web 并保存密钥文件
+        id: begin
+        if: steps.ssh.outcome == 'success'
+        run: |
+          set -euo pipefail
+          ssh=$(cat "$RUNNER_TEMP/bxk_ssh_path")
+          target=$(cat "$RUNNER_TEMP/bxk_target")
+          "$ssh" "$target" bash -s -- "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            < "$GITHUB_WORKSPACE/.github/deploy/remote-begin.sh"
+
+      - name: 同步 backend 到 /root/dev/Sequoia-X
+        id: sync-backend
+        if: steps.begin.outcome == 'success'
+        run: |
+          set -euo pipefail
+          ssh=$(cat "$RUNNER_TEMP/bxk_ssh_path")
+          target=$(cat "$RUNNER_TEMP/bxk_target")
+          rsync -rltz --delay-updates --no-owner --no-group --stats \
+            --filter="merge $GITHUB_WORKSPACE/.github/deploy/rsync.filter" \
+            -e "$ssh" \
+            "$GITHUB_WORKSPACE/backend/" \
+            "$target:/root/dev/Sequoia-X/"
+
+      - name: 同步 web 到 /root/dev/sequoia-x-web
+        id: sync-web
+        if: steps.begin.outcome == 'success' && steps.sync-backend.outcome == 'success'
+        run: |
+          set -euo pipefail
+          ssh=$(cat "$RUNNER_TEMP/bxk_ssh_path")
+          target=$(cat "$RUNNER_TEMP/bxk_target")
+          rsync -rltz --delay-updates --no-owner --no-group --stats \
+            --filter="merge $GITHUB_WORKSPACE/.github/deploy/rsync.filter" \
+            -e "$ssh" \
+            "$GITHUB_WORKSPACE/web/" \
+            "$target:/root/dev/sequoia-x-web/"
+
+      - name: 还原密钥、构建并启动 sequoia-x-web
+        id: finish
+        if: always() && steps.ssh.outcome == 'success'
+        run: |
+          set -euo pipefail
+          ssh=$(cat "$RUNNER_TEMP/bxk_ssh_path")
+          target=$(cat "$RUNNER_TEMP/bxk_target")
+          mode=fail
+          if [[ "${SYNC_BACKEND}" == "success" && "${SYNC_WEB}" == "success" ]]; then
+            mode=ok
+          fi
+          "$ssh" "$target" bash -s -- "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "$mode" \
+            < "$GITHUB_WORKSPACE/.github/deploy/remote-finish.sh"
+        env:
+          SYNC_BACKEND: ${{ steps.sync-backend.outcome }}
+          SYNC_WEB: ${{ steps.sync-web.outcome }}

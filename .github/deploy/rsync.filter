@@ -1,0 +1,50 @@
+# rsync merge rules. First match wins.
+# Anchored /data/ is the runtime DB dir. Do not exclude sequoia_x/data/ (Python package).
+# No --delete: live trees are not this git remote and hold files this repo does not.
+
++ /.env.example
+- .env
+- .env.*
+- .dev.vars
+- .dev.vars*
+- .qbs.env
+- .ingest_token
+- INGEST_TOKEN.txt
+- *.pem
+- *.key
+- *.p12
+- *.pfx
+- id_rsa*
+- *.secret
+- *.bak
+- *.bak.*
+- *.orig
+- *.rej
+- /data/***
+- /logs/***
+- /patches_pending/***
+- *.log
+- log*.txt
+- /.venv/***
+- /venv/***
+- /env/***
+- /node_modules/***
+- /.wrangler/***
+- /.git/***
+- /opt_cont/***
+- __pycache__/
+- *.py[cod]
+- .pytest_cache/***
+- .ruff_cache/***
+- .mypy_cache/***
+- .hypothesis/***
+- *.db
+- *.sqlite
+- *.sqlite3
+- *.db-journal
+- *.parquet
+- *.feather
+- *.pkl
+- *.zip
+- *.tar.gz
+- .DS_Store
