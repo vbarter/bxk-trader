@@ -1,0 +1,174 @@
+{
+  "month": "2026-09",
+  "calendar_source_file": "/tmp/wc_tencent2.json",
+  "price_basis": "不复权",
+  "note": "信号日 R 推荐 → 次日开盘买入 → 再下一日开盘卖出结算；收益=(卖出日开盘−买入日开盘)/买入日开盘，五只涨跌幅相加；未走完标未结算。仅观察非建议。价格与涨跌均按不复权行情。",
+  "methodology": "R signal -> T+1 open buy -> T+2 open sell; eq_sum_chg_pct = sum of 5 chg_pct; 不复权",
+  "A_true_llm_rerank_settled": {
+    "sum_eq_sum": 31.4756,
+    "n_days": 11,
+    "dates": [
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17"
+    ]
+  },
+  "A_contaminated_llm_track_all_settled": {
+    "sum_eq_sum": 20.5292,
+    "n_days": 13,
+    "note": "includes asof/rule days mislabeled under tracks.llm"
+  },
+  "A_asof_or_rule_days_on_llm_track": {
+    "sum_eq_sum": -10.9464,
+    "n_days": 2,
+    "dates": [
+      "2026-09-01",
+      "2026-09-11"
+    ],
+    "sources": [
+      "asof_strategies_unique_first5",
+      "rule_order"
+    ]
+  },
+  "B_multi_hit_settled_n5": {
+    "sum_eq_sum": -13.9861,
+    "n_days": 12,
+    "dates": [
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16"
+    ]
+  },
+  "intersection_both_n5_settled_and_true_llm": {
+    "sum_A_llm": 9.0422,
+    "sum_B_multi_hit": -11.7073,
+    "delta_B_minus_A": -20.7495,
+    "n_days": 10,
+    "dates": [
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-07",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16"
+    ],
+    "daily": [
+      {
+        "date": "2026-09-02",
+        "llm": 10.6532,
+        "multi_hit": 1.7032,
+        "delta": -8.95
+      },
+      {
+        "date": "2026-09-03",
+        "llm": -19.248,
+        "multi_hit": -21.1391,
+        "delta": -1.8911
+      },
+      {
+        "date": "2026-09-04",
+        "llm": 13.132,
+        "multi_hit": 14.6883,
+        "delta": 1.5563
+      },
+      {
+        "date": "2026-09-07",
+        "llm": 4.1208,
+        "multi_hit": -9.0784,
+        "delta": -13.1992
+      },
+      {
+        "date": "2026-09-08",
+        "llm": 7.5277,
+        "multi_hit": 20.7787,
+        "delta": 13.251
+      },
+      {
+        "date": "2026-09-09",
+        "llm": -12.6194,
+        "multi_hit": -17.9647,
+        "delta": -5.3453
+      },
+      {
+        "date": "2026-09-10",
+        "llm": 8.2388,
+        "multi_hit": -2.1815,
+        "delta": -10.4203
+      },
+      {
+        "date": "2026-09-14",
+        "llm": -2.4291,
+        "multi_hit": -6.1104,
+        "delta": -3.6813
+      },
+      {
+        "date": "2026-09-15",
+        "llm": 0.1664,
+        "multi_hit": 2.5141,
+        "delta": 2.3477
+      },
+      {
+        "date": "2026-09-16",
+        "llm": -0.5002,
+        "multi_hit": 5.0825,
+        "delta": 5.5827
+      }
+    ]
+  },
+  "missing_or_empty_days": [
+    {
+      "date": "2026-09-17",
+      "flags": "multi_hit_empty|multi_hit_not_settled",
+      "llm_class": "llm_rerank",
+      "llm_eq_sum": 22.4334,
+      "mh_eq_sum": null
+    },
+    {
+      "date": "2026-09-18",
+      "flags": "llm_not_settled|multi_hit_not_settled",
+      "llm_class": "llm_rerank",
+      "llm_eq_sum": null,
+      "mh_eq_sum": null
+    }
+  ],
+  "offline_consistency": {
+    "mh_code_match_all_settled_with_offline": true,
+    "B_sum": -13.9861,
+    "offline_optimized_sep": {
+      "sum_eq_sum_chg_pct": -13.9859,
+      "avg_eq_sum_chg_pct": -1.1655,
+      "n_days": 12,
+      "win_rate": 0.4167,
+      "max_drawdown_daily_path": -28.3955
+    },
+    "offline_calendar_unref_sep": {
+      "sum_eq_sum_chg_pct": -1.9042,
+      "avg_eq_sum_chg_pct": -0.1587,
+      "n_days": 12,
+      "win_rate": 0.5,
+      "max_drawdown_daily_path": -19.248
+    },
+    "llm_without_0917": -1.9042
+  }
+}

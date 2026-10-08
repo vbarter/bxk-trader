@@ -1,0 +1,80 @@
+# ===== 巴小卡 monorepo .gitignore =====
+
+# --- VCS / OS / IDE ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.kiro
+
+# --- Secrets（绝不提交） ---
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars*
+.qbs.env
+.ingest_token
+INGEST_TOKEN.txt
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+*.secret
+
+# --- 备份 / 临时补丁 ---
+*.bak
+*.bak.*
+*.bak*
+*.orig
+*.rej
+*~
+patches_pending_*/
+
+# --- 日志 ---
+*.log
+log*.txt
+logs/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# --- Node / Cloudflare Worker ---
+node_modules/
+.wrangler/
+npm-debug.log*
+.npm/
+
+# --- 数据 / 运行产物（大文件、数据库、回测输出） ---
+data/
+**/data/fix_*
+**/llm_raw/
+opt_cont/
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.parquet
+*.feather
+*.pkl
+*.zip
+*.tar.gz
+
+# 后端代码包 sequoia_x/data 是源代码，不是数据目录
+!backend/sequoia_x/data/
