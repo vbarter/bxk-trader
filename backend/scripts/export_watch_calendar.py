@@ -15,9 +15,13 @@ Picks source:
   - Prefer data/daily_picks/{date}.json
   - Days without daily_picks are omitted (no fake Theo Top5 placeholders).
 
-Prices: baostock adjustflag=3 不复权 opens (raw). Spot overlay for
-today when baostock has no bar yet. Falls back to details ohlcv_60d.
-Writes data/watch_calendar.json.
+Prices: baostock adjustflag=3 不复权 opens (raw) when the server answers.
+Every baostock recv has a hard timeout (sequoia_x.data.baostock_guard).
+On timeout/failure, prefer local 不复权 bars: details ohlcv_60d plus the
+raw opens sync_watch_today just wrote (watch_spot_opens.json, and
+stock_daily rows that are open-only). stock_daily history is 后复权 and
+is not used as raw opens. Spot overlay still fills today when baostock
+has no bar yet. Writes data/watch_calendar.json.
 """
 
 from __future__ import annotations
@@ -37,8 +41,19 @@ DATA_DIR = ROOT / "data"
 DETAILS_DIR = DATA_DIR / "details"
 PICKS_DIR = DATA_DIR / "daily_picks"
 OUT_PATH = DATA_DIR / "watch_calendar.json"
+DB_PATH = DATA_DIR / "sequoia_v2.db"
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pick_models import MODEL_KEYS, MODEL_LABELS, all_archive_dirs, all_picks_dirs, model_id_for  # noqa: E402
+
+from sequoia_x.data.baostock_guard import (  # noqa: E402
+    close_socket,
+    safe_logout,
+    transport_failed,
+)
+from sequoia_x.data.baostock_guard import dead as baostock_dead  # noqa: E402
+from sequoia_x.data.baostock_guard import install as install_baostock_timeout  # noqa: E402
+
 SPOT_PATH = DATA_DIR / "watch_spot_opens.json"
 
 # Bootstrap trading calendar / baostock probe symbols (not used as fake picks).
@@ -175,20 +190,36 @@ def to_em_secid(symbol: str) -> str:
     return f"{mkt}.{symbol}"
 
 
-def load_bars_from_baostock(code: str, end_date: str) -> list[dict[str, Any]]:
+def load_bars_from_baostock(code: str, end_date: str) -> tuple[list[dict[str, Any]], bool]:
+    """Return (bars, ok). ok is False only on timeout / recv failure.
+
+    An empty success (ok True, bars []) is a real answer — callers keep the
+    old tencent → details order. A transport failure prefers local bars.
+    """
+    if baostock_dead():
+        return [], False
     import baostock as bs
 
-    rs = bs.query_history_k_data_plus(
-        to_bs_code(code),
-        "date,open,high,low,close,volume",
-        start_date=START_DATE,
-        end_date=end_date,
-        frequency="d",
-        adjustflag=ADJUST_FLAG,
-    )
-    if rs.error_code != "0":
+    try:
+        rs = bs.query_history_k_data_plus(
+            to_bs_code(code),
+            "date,open,high,low,close,volume",
+            start_date=START_DATE,
+            end_date=end_date,
+            frequency="d",
+            adjustflag=ADJUST_FLAG,
+        )
+    except Exception as exc:  # noqa: BLE001
+        warn(f"{code}: baostock 不复权 failed: {exc}")
+        return [], False
+    if rs is None or transport_failed(rs):
+        msg = getattr(rs, "error_msg", None) if rs is not None else "no result"
+        warn(f"{code}: baostock 不复权 failed: {msg}")
+        return [], False
+    if getattr(rs, "error_code", "1") != "0":
+        # Server answered; keep the historical tencent → details fallback.
         warn(f"{code}: baostock 不复权 failed: {rs.error_msg}")
-        return []
+        return [], True
     bars: list[dict[str, Any]] = []
     while rs.next():
         row = dict(zip(rs.fields, rs.get_row_data()))
@@ -216,7 +247,129 @@ def load_bars_from_baostock(code: str, end_date: str) -> list[dict[str, Any]]:
                 "volume": float(volume) if volume not in ("", None) else None,
             }
         )
-    return bars
+    return bars, True
+
+
+def load_db_raw_spot_opens(day: str) -> dict[str, float]:
+    """Today's raw opens sync_watch_today wrote into stock_daily.
+
+    Those rows have open set and high/low/close NULL. Full 后复权 bars
+    (close filled) are ignored — mixing them into 不复权 settlement is wrong.
+    """
+    if not DB_PATH.exists():
+        return {}
+    import sqlite3
+
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute(
+                """
+                SELECT symbol, open FROM stock_daily
+                WHERE date = ? AND open IS NOT NULL AND open > 0
+                  AND high IS NULL AND low IS NULL AND close IS NULL
+                """,
+                (day,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        warn(f"stock_daily raw opens unreadable: {exc}")
+        return {}
+    out: dict[str, float] = {}
+    for symbol, open_ in rows:
+        code = str(symbol).zfill(6)
+        try:
+            price = float(open_)
+        except (TypeError, ValueError):
+            continue
+        if price > 0:
+            out[code] = price
+    return out
+
+
+def spot_open_map(day: str) -> dict[str, float]:
+    """Raw opens for `day`: open-only stock_daily rows, then the spot file.
+
+    The spot file is what sync_watch_today always writes; it wins on conflict.
+    """
+    out = load_db_raw_spot_opens(day)
+    if not SPOT_PATH.exists():
+        return out
+    try:
+        cached = json.loads(SPOT_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        warn(f"spot snapshot unreadable: {exc}")
+        return out
+    if cached.get("date") != day or not isinstance(cached.get("opens"), dict):
+        return out
+    for code, item in cached["opens"].items():
+        if not isinstance(item, dict) or item.get("open") is None:
+            continue
+        try:
+            price = float(item["open"])
+        except (TypeError, ValueError):
+            continue
+        if price > 0:
+            out[str(code).zfill(6)] = price
+    return out
+
+
+def _has_history(bars: list[dict[str, Any]], today: str) -> bool:
+    return any(
+        isinstance(bar.get("date"), str) and bar["date"] < today and bar.get("open") is not None
+        for bar in bars
+    )
+
+
+def merge_today_open(
+    bars: list[dict[str, Any]], code: str, today: str, spot: dict[str, float]
+) -> list[dict[str, Any]]:
+    open_ = spot.get(code)
+    if open_ is None:
+        return bars
+    merged: list[dict[str, Any]] = []
+    replaced = False
+    for bar in bars:
+        if bar.get("date") == today:
+            bar = dict(bar)
+            bar["open"] = open_
+            replaced = True
+        merged.append(bar)
+    if not replaced:
+        merged.append(
+            {
+                "date": today,
+                "open": open_,
+                "high": None,
+                "low": None,
+                "close": None,
+                "volume": None,
+            }
+        )
+    merged.sort(key=lambda bar: bar.get("date") or "")
+    return merged
+
+
+def local_raw_bars(code: str, today: str, spot: dict[str, float]) -> list[dict[str, Any]]:
+    """不复权 history from details, with today's raw open from the local snapshot."""
+    return merge_today_open(load_bars_from_details(code), code, today, spot)
+
+
+def select_settle_bars(
+    remote: list[dict[str, Any]],
+    remote_ok: bool,
+    local: list[dict[str, Any]],
+    today: str,
+) -> tuple[list[dict[str, Any]], str]:
+    """baostock wins when it actually returned bars.
+
+    On timeout/failure, local history (details + today's raw opens) is enough
+    for open→open settle and is preferred over another network hop. A successful
+    empty baostock reply is not a failure — caller keeps the tencent/details path.
+    """
+    if remote_ok and remote:
+        return remote, "baostock"
+    if (not remote_ok) and _has_history(local, today):
+        return local, "local"
+    return [], "miss"
 
 
 
@@ -321,6 +474,14 @@ def fetch_spot_opens(codes: list[str]) -> dict[str, float]:
                             out[code] = float(item["open"])
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             pass
+    missing = [c for c in codes if c not in out]
+    if not missing:
+        return out
+    # sync_watch_today also upserts open-only rows (WATCH_WRITE_STOCK_DAILY=1).
+    # Prefer those over another spot HTTP call.
+    for code, open_ in load_db_raw_spot_opens(today).items():
+        if code in missing:
+            out[code] = open_
     missing = [c for c in codes if c not in out]
     if not missing:
         return out
@@ -552,16 +713,20 @@ def load_index_bars(logged_in: bool, end_date: str) -> tuple[str | None, dict[st
 
     for code in INDEX_CANDIDATES:
         bars: list[dict[str, Any]] = []
-        if logged_in:
-            rs = bs.query_history_k_data_plus(
-                f"sh.{code}",
-                "date,open,high,low,close,volume",
-                start_date=START_DATE,
-                end_date=end_date,
-                frequency="d",
-                adjustflag=ADJUST_FLAG,
-            )
-            if rs.error_code == "0":
+        if logged_in and not baostock_dead():
+            try:
+                rs = bs.query_history_k_data_plus(
+                    f"sh.{code}",
+                    "date,open,high,low,close,volume",
+                    start_date=START_DATE,
+                    end_date=end_date,
+                    frequency="d",
+                    adjustflag=ADJUST_FLAG,
+                )
+            except Exception as exc:  # noqa: BLE001
+                warn(f"index sh.{code} baostock failed: {exc}")
+                rs = None
+            if rs is not None and not transport_failed(rs) and rs.error_code == "0":
                 while rs.next():
                     row = dict(zip(rs.fields, rs.get_row_data()))
                     open_ = row.get("open")
@@ -578,6 +743,8 @@ def load_index_bars(logged_in: bool, end_date: str) -> tuple[str | None, dict[st
                         )
                     except (TypeError, ValueError):
                         continue
+            elif rs is not None and (transport_failed(rs) or rs.error_code != "0"):
+                warn(f"index sh.{code} baostock failed: {getattr(rs, 'error_msg', '')}")
         if not bars:
             # Index codes live on Shanghai; bypass load_bars_from_tencent board heuristic.
             try:
@@ -691,10 +858,19 @@ def build_calendar() -> dict[str, Any]:
     end_date = date.today().isoformat()
     bootstrap_codes = list(CALENDAR_PROBE)
     per_symbol: dict[str, dict[str, dict[str, Any]]] = {}
+    # Local raw opens are read up front so a hung baostock login cannot
+    # drop the bars sync_watch_today just wrote.
+    spot_map = spot_open_map(end_date)
+    install_baostock_timeout()
 
-    login = bs.login()
-    if login.error_code != "0":
-        warn(f"baostock login failed: {login.error_msg}; will try details fallback")
+    try:
+        login = bs.login()
+    except Exception as exc:  # noqa: BLE001
+        warn(f"baostock login failed: {exc}; will use local bars")
+        login = None
+    if login is None or baostock_dead() or getattr(login, "error_code", "1") != "0":
+        msg = getattr(login, "error_msg", None) if login is not None else "no result"
+        warn(f"baostock login failed: {msg}; will use local bars")
         logged_in = False
     else:
         logged_in = True
@@ -703,19 +879,36 @@ def build_calendar() -> dict[str, Any]:
         def ensure_bars(code: str) -> None:
             if code in per_symbol:
                 return
-            bars: list[dict[str, Any]] = []
-            if logged_in:
-                bars = load_bars_from_baostock(code, end_date)
+            remote: list[dict[str, Any]] = []
+            remote_ok = False
+            if logged_in and not baostock_dead():
+                remote, remote_ok = load_bars_from_baostock(code, end_date)
+            # Only build the local list when baostock did not already win.
+            local = [] if remote_ok and remote else local_raw_bars(code, end_date, spot_map)
+            chosen, source = select_settle_bars(remote, remote_ok, local, end_date)
+            if source == "baostock":
+                per_symbol[code] = index_bars(chosen)
+                return
+            if source == "local":
+                warn(
+                    f"{code}: baostock timeout/failure; using local 不复权 bars "
+                    f"({len(chosen)})"
+                )
+                per_symbol[code] = index_bars(chosen)
+                return
+            bars = list(remote) if remote_ok else []
             if not bars:
                 bars = load_bars_from_tencent(code, end_date)
                 if bars:
                     print(f"[tencent] {code}: {len(bars)} 不复权 bars", flush=True)
             if not bars:
-                bars = load_bars_from_details(code)
+                bars = local or load_bars_from_details(code)
                 if bars:
                     warn(f"{code}: using details ohlcv_60d ({len(bars)} bars)")
                 else:
                     warn(f"{code}: no 不复权 bars from baostock/tencent/details")
+            if not remote_ok:
+                bars = merge_today_open(bars, code, end_date, spot_map)
             per_symbol[code] = index_bars(bars)
 
         for code in bootstrap_codes:
@@ -1017,7 +1210,10 @@ def build_calendar() -> dict[str, Any]:
         }
     finally:
         if logged_in:
-            bs.logout()
+            safe_logout(bs)
+        else:
+            # Login never completed; don't block on logout's recv.
+            close_socket()
 
 
 def merge_track_days(new_days: list[dict[str, Any]], old_days: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -158,31 +158,65 @@ def upsert_bar(
 
 
 def fetch_baostock(day: str, codes: list[str]) -> list[tuple]:
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from sequoia_x.data.baostock_guard import (
+        close_socket,
+        dead,
+        install,
+        safe_logout,
+        transport_failed,
+    )
+
+    install()
     import baostock as bs
 
-    lg = bs.login()
-    if lg.error_code != "0":
-        print(f"[warn] baostock login failed: {lg.error_msg}", file=sys.stderr)
+    try:
+        lg = bs.login()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] baostock login failed: {exc}", file=sys.stderr)
+        close_socket()
+        return []
+    if lg is None or dead() or getattr(lg, "error_code", "1") != "0":
+        msg = getattr(lg, "error_msg", None) if lg is not None else "no result"
+        print(f"[warn] baostock login failed: {msg}", file=sys.stderr)
+        close_socket()
         return []
     rows: list[tuple] = []
     try:
         for code in codes:
-            rs = bs.query_history_k_data_plus(
-                to_bs_code(code),
-                "date,open,high,low,close,volume,amount",
-                start_date=day,
-                end_date=day,
-                frequency="d",
-                adjustflag=ADJUST_FLAG,
-            )
-            if rs.error_code != "0":
-                print(f"[warn] {code}: baostock query failed {rs.error_msg}", file=sys.stderr)
+            if dead():
+                print(
+                    "[warn] baostock timed out; stop further queries, use local spot",
+                    file=sys.stderr,
+                )
+                break
+            try:
+                rs = bs.query_history_k_data_plus(
+                    to_bs_code(code),
+                    "date,open,high,low,close,volume,amount",
+                    start_date=day,
+                    end_date=day,
+                    frequency="d",
+                    adjustflag=ADJUST_FLAG,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[warn] {code}: baostock query failed {exc}", file=sys.stderr)
+                if dead():
+                    break
+                continue
+            if rs is None or transport_failed(rs) or rs.error_code != "0":
+                msg = getattr(rs, "error_msg", None) if rs is not None else "no result"
+                print(f"[warn] {code}: baostock query failed {msg}", file=sys.stderr)
+                if dead() or transport_failed(rs):
+                    break
                 continue
             while rs.next():
                 data = rs.get_row_data()
                 rows.append((code, *data))
     finally:
-        bs.logout()
+        safe_logout(bs)
     return rows
 
 

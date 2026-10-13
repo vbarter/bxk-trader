@@ -32,24 +32,61 @@ CREATE INDEX IF NOT EXISTS idx_symbol_date ON stock_daily (symbol, date);
 
 
 def _bs_fetch_batch(tasks: list) -> list:
-    """多进程 worker：独立 login，批量拉取 baostock 数据。"""
+    """多进程 worker：独立 login，批量拉取 baostock 数据。
+
+    子进程不继承调用方是否装过超时；这里自己 arm。一个 recv 卡住就熔断，
+    剩下的标的交给 close_pm 的备用行情，而不是每只再等一个超时。
+    """
+    from sequoia_x.data.baostock_guard import (
+        close_socket,
+        dead,
+        install,
+        safe_logout,
+        transport_failed,
+    )
+
+    install()
     import baostock as bs
-    bs.login()
+
+    try:
+        lg = bs.login()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"baostock login failed: {exc}")
+        close_socket()
+        return []
+    if lg is None or dead() or getattr(lg, "error_code", "1") != "0":
+        logger.warning(f"baostock login failed: {getattr(lg, 'error_msg', None)}")
+        close_socket()
+        return []
     results = []
-    for symbol, bs_code, start, end in tasks:
-        rs = bs.query_history_k_data_plus(
-            bs_code,
-            "date,open,high,low,close,volume,amount",
-            start_date=start,
-            end_date=end,
-            frequency="d",
-            adjustflag="1",  # 后复权
-        )
-        if rs.error_code != "0":
-            continue
-        while rs.next():
-            results.append([symbol] + rs.get_row_data())
-    bs.logout()
+    try:
+        for symbol, bs_code, start, end in tasks:
+            if dead():
+                logger.warning("baostock timed out; skip remaining symbols in this batch")
+                break
+            try:
+                rs = bs.query_history_k_data_plus(
+                    bs_code,
+                    "date,open,high,low,close,volume,amount",
+                    start_date=start,
+                    end_date=end,
+                    frequency="d",
+                    adjustflag="1",  # 后复权
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[{symbol}] baostock query failed: {exc}")
+                if dead():
+                    break
+                continue
+            if rs is None or transport_failed(rs) or rs.error_code != "0":
+                if dead() or transport_failed(rs):
+                    logger.warning(f"[{symbol}] baostock recv failed; skip rest of batch")
+                    break
+                continue
+            while rs.next():
+                results.append([symbol] + rs.get_row_data())
+    finally:
+        safe_logout(bs)
     return results
 
 
@@ -181,6 +218,12 @@ class DataEngine:
         from datetime import date, timedelta
 
         import baostock as bs
+
+        from sequoia_x.data.baostock_guard import install
+
+        # 回填本来就要跑很久。只给单次 recv 加超时，不熔断整轮
+        # （一只卡住按原重试跳过，后面的继续拉）。
+        install(circuit=False)
 
         today_str = date.today().strftime("%Y-%m-%d")
         max_retries = 3
@@ -316,13 +359,25 @@ class DataEngine:
         """通过 baostock 获取全市场 A 股代码列表。"""
         import baostock as bs
 
-        lg = bs.login()
-        if lg.error_code != "0":
-            logger.error(f"baostock 登录失败: {lg.error_msg}")
+        from sequoia_x.data.baostock_guard import close_socket, dead, install, safe_logout
+
+        install()
+        try:
+            lg = bs.login()
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"baostock 登录失败: {exc}")
+            close_socket()
+            return []
+        if lg is None or dead() or getattr(lg, "error_code", "1") != "0":
+            logger.error(f"baostock 登录失败: {getattr(lg, 'error_msg', None)}")
+            close_socket()
             return []
 
         try:
             rs = bs.query_stock_basic(code_name="", code="")
+            if rs is None or dead() or getattr(rs, "error_code", "1") != "0":
+                logger.error(f"获取股票列表失败: {getattr(rs, 'error_msg', None)}")
+                return []
             symbols = []
             while rs.next():
                 row = rs.get_row_data()
@@ -337,7 +392,7 @@ class DataEngine:
             logger.error(f"获取股票列表失败: {e}")
             return []
         finally:
-            bs.logout()
+            safe_logout(bs)
 
     def get_local_symbols(self) -> list[str]:
         with sqlite3.connect(self.db_path) as conn:

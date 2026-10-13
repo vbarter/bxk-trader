@@ -18,6 +18,15 @@ import urllib.request
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from sequoia_x.data.baostock_guard import (  # noqa: E402
+    close_socket,
+    safe_logout,
+)
+from sequoia_x.data.baostock_guard import dead as baostock_dead  # noqa: E402
+from sequoia_x.data.baostock_guard import install as install_baostock_timeout  # noqa: E402
+
 DATA_DIR = ROOT / "data"
 LATEST_PATH = DATA_DIR / "latest.json"
 DETAILS_DIR = DATA_DIR / "details"
@@ -341,6 +350,9 @@ def load_reports(code: str, periods: list[tuple[int, int]]) -> list[dict[str, An
     reports: list[dict[str, Any]] = []
     seen: set[str] = set()
     for year, quarter in periods:
+        if baostock_dead():
+            warn(f"{code}: baostock timed out; skip remaining profit queries")
+            break
         rows = result_rows(
             bs.query_profit_data(code=code, year=year, quarter=quarter),
             f"{code} profit {year}Q{quarter}",
@@ -470,14 +482,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[sigday] {sig_day}: tencent qt bars={len(sig_bars)}/{len(to_fetch)}", flush=True)
     sig_appended = 0
 
-    login = bs.login()
-    if login.error_code != "0":
-        raise RuntimeError(f"Baostock login failed: {login.error_code} {login.error_msg}")
+    install_baostock_timeout()
+    try:
+        login = bs.login()
+    except Exception as exc:  # noqa: BLE001
+        close_socket()
+        raise RuntimeError(f"Baostock login failed: {exc}") from exc
+    if login is None or baostock_dead() or getattr(login, "error_code", "1") != "0":
+        msg = getattr(login, "error_msg", None) if login is not None else "no result"
+        code = getattr(login, "error_code", None) if login is not None else "none"
+        close_socket()
+        raise RuntimeError(f"Baostock login failed: {code} {msg}")
 
     exported = 0
     try:
         with sqlite3.connect(DB_PATH) as connection:
             for index, symbol in enumerate(to_fetch, start=1):
+                if baostock_dead():
+                    warn("baostock timed out; skipping remaining detail fetches")
+                    break
                 try:
                     market = infer_market(symbol)
                     remote_code = baostock_code(symbol, market)
@@ -536,7 +559,7 @@ def main(argv: list[str] | None = None) -> int:
                 if index == 1 or index % 10 == 0 or index == len(to_fetch):
                     print(f"[{index}/{len(to_fetch)}] exported={exported}", flush=True)
     finally:
-        bs.logout()
+        safe_logout(bs)
     if sig_day:
         print(f"[sigday] {sig_day}: appended tencent_qt signal-day bar to {sig_appended} details", flush=True)
 
