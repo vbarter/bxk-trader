@@ -63,6 +63,13 @@ class TurtleTradeStrategy(BaseStrategy):
         """返回 (成功的流通市值, 需要回退的代码)。干净的空结果不算失败。"""
         import baostock as bs
 
+        # 只给 recv 加硬超时。失败后的缓存回退仍是上面的 _caps_from_local_cache，
+        # 这里不再做第二套。测试把 baostock 换成 MagicMock 时没有 __file__，跳过。
+        if isinstance(getattr(bs, "__file__", None), str):
+            from sequoia_x.data.baostock_guard import install
+
+            install()
+
         today_str = date.today().strftime("%Y-%m-%d")
         market_caps: dict[str, float] = {}
         failed: list[str] = []

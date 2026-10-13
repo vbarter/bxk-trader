@@ -41,15 +41,52 @@ class FeishuNotifier:
     def _get_stock_names(symbols: list[str]) -> dict[str, str]:
         """通过 baostock 批量查询股票名称，返回 {code: name} 映射。"""
         import baostock as bs
-        bs.login()
-        mapping = {}
-        for code in symbols:
-            prefix = "sh" if code.startswith(("6", "9")) else "sz"
-            rs = bs.query_stock_basic(code=f"{prefix}.{code}")
-            while rs.next():
-                row = rs.get_row_data()
-                mapping[code] = row[1]  # 第2个字段是股票名称
-        bs.logout()
+
+        from sequoia_x.data.baostock_guard import (
+            close_socket,
+            dead,
+            install,
+            safe_logout,
+            transport_failed,
+        )
+
+        install()
+        mapping: dict[str, str] = {}
+        try:
+            lg = bs.login()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"baostock login failed, names skipped: {exc}")
+            close_socket()
+            return mapping
+        if lg is None or dead() or getattr(lg, "error_code", "1") != "0":
+            logger.warning(
+                f"baostock login failed, names skipped: {getattr(lg, 'error_msg', None)}"
+            )
+            close_socket()
+            return mapping
+        try:
+            for code in symbols:
+                if dead():
+                    logger.warning("baostock timed out; skip remaining stock names")
+                    break
+                prefix = "sh" if code.startswith(("6", "9")) else "sz"
+                try:
+                    rs = bs.query_stock_basic(code=f"{prefix}.{code}")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"[{code}] baostock name query failed: {exc}")
+                    if dead():
+                        break
+                    continue
+                if rs is None or transport_failed(rs) or getattr(rs, "error_code", "1") != "0":
+                    if dead() or transport_failed(rs):
+                        break
+                    continue
+                while rs.next():
+                    row = rs.get_row_data()
+                    if len(row) > 1:
+                        mapping[code] = row[1]  # 第2个字段是股票名称
+        finally:
+            safe_logout(bs)
         return mapping
 
     def _build_card(self, symbols: list[str], strategy_name: str) -> dict:

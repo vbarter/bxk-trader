@@ -172,26 +172,53 @@ def baostock_opens(codes: list[str], end_date: str) -> dict[str, dict[str, float
     except ImportError:
         print("[dual] baostock missing; using details/tencent only", flush=True)
         return out
-    lg = bs.login()
-    if lg.error_code != "0":
-        print(f"[dual] baostock login fail: {lg.error_msg}", flush=True)
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from sequoia_x.data.baostock_guard import (
+        close_socket,
+        dead,
+        install,
+        safe_logout,
+        transport_failed,
+    )
+
+    install()
+    try:
+        lg = bs.login()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[dual] baostock login fail: {exc}", flush=True)
+        close_socket()
+        return out
+    if lg is None or dead() or getattr(lg, "error_code", "1") != "0":
+        msg = getattr(lg, "error_msg", None) if lg is not None else "no result"
+        print(f"[dual] baostock login fail: {msg}", flush=True)
+        close_socket()
         return out
     try:
         for code in codes:
+            if dead():
+                print("[dual] baostock timed out; using details/tencent for the rest", flush=True)
+                break
             if code.startswith(("5", "6", "9")):
                 bs_code = f"sh.{code}"
             else:
                 bs_code = f"sz.{code}"
-            rs = bs.query_history_k_data_plus(
-                bs_code,
-                "date,open",
-                start_date=START_DATE,
-                end_date=end_date,
-                frequency="d",
-                adjustflag="3",
-            )
+            try:
+                rs = bs.query_history_k_data_plus(
+                    bs_code,
+                    "date,open",
+                    start_date=START_DATE,
+                    end_date=end_date,
+                    frequency="d",
+                    adjustflag="3",
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[dual] {code}: baostock query fail: {exc}", flush=True)
+                if dead():
+                    break
+                continue
             opens: dict[str, float] = {}
-            if rs.error_code == "0":
+            if rs is not None and not transport_failed(rs) and rs.error_code == "0":
                 while rs.next():
                     row = dict(zip(rs.fields, rs.get_row_data()))
                     o = row.get("open")
@@ -201,10 +228,13 @@ def baostock_opens(codes: list[str], end_date: str) -> dict[str, dict[str, float
                         opens[row["date"]] = float(o)
                     except (TypeError, ValueError):
                         continue
+            elif dead() or transport_failed(rs):
+                print(f"[dual] {code}: baostock query fail; stop", flush=True)
+                break
             if opens:
                 out[code] = opens
     finally:
-        bs.logout()
+        safe_logout(bs)
     return out
 
 

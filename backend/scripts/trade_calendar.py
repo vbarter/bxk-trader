@@ -125,12 +125,26 @@ def _via_baostock(day: str) -> bool | None:
         import baostock as bs
     except ImportError:
         return None
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from sequoia_x.data.baostock_guard import (
+        close_socket,
+        dead,
+        install,
+        safe_logout,
+        transport_failed,
+    )
+
+    install()
+    logged_in = False
     try:
         lg = bs.login()
-        if lg.error_code != "0":
+        if lg is None or dead() or getattr(lg, "error_code", "1") != "0":
             return None
+        logged_in = True
         rs = bs.query_trade_dates(start_date=day, end_date=day)
-        if rs.error_code != "0":
+        if rs is None or transport_failed(rs) or rs.error_code != "0":
             return None
         while rs.next():
             row = rs.get_row_data()
@@ -140,10 +154,10 @@ def _via_baostock(day: str) -> bool | None:
     except Exception:  # noqa: BLE001
         return None
     finally:
-        try:
-            bs.logout()
-        except Exception:  # noqa: BLE001
-            pass
+        if logged_in and not dead():
+            safe_logout(bs)
+        else:
+            close_socket()
 
 
 def is_trading_day(day: str | date, allow_baostock: bool = True) -> tuple[bool | None, str]:
