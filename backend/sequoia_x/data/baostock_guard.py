@@ -44,10 +44,15 @@ def timeout_s() -> float:
 
 
 def reset() -> None:
-    """Clear the circuit. Used by tests; does not unwrap send_msg."""
+    """Clear the circuit and restore the default timeout. Does not unwrap send_msg.
+
+    A test that called install(0.4) must not leave that timeout stuck for the
+    next caller in the same process (feishu / the scan).
+    """
     _state["dead"] = False
     _state["reason"] = ""
     _state["noted"] = False
+    _state["timeout"] = DEFAULT_TIMEOUT_S
     close_socket()
 
 
